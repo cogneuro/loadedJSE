@@ -1,0 +1,1308 @@
+---
+title: "Loaded Joint Simon Effect"
+author: "cn"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    toc_float: 
+      collapse: false
+      smooth_scroll: false
+    number_sections: true
+    theme: cosmo 
+    highlight: tango
+    code_folding: hide
+subtitle: Working memory load on the joint Simon effect
+mainfont: Noto Sans CJK KR
+---
+
+```{r wd, echo=FALSE}
+setwd('~/Dropbox/Manuscripts/KIM-JSE/')
+```
+
+```{css, echo=FALSE}
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: scroll !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+```
+
+```{r setup, message=FALSE}
+set.seed(12345) # for reproducibility
+
+if (!require("pacman", quietly = TRUE)) install.packages("pacman")
+pacman::p_load(tidyverse, psych, papaja, knitr) # data manipulation
+pacman::p_load(afex, emmeans) # stats
+pacman::p_load(cowplot, patchwork) # plot
+pacman::p_load(permuco) # permutation
+pacman::p_load(Superpower) # power analysis
+
+options(dplyr.summarise.inform=FALSE)
+options(knitr.kable.NA = '')
+set_sum_contrasts() # see Singmann & Kellen (2020)
+
+nsims <- 1e4
+```
+
+
+# Task Comparison
+
+아래 모든 과제에서 참가자는 화살표의 방향을 무시한 채로 색깔에 대해서만 반응한다. 가령, (A) 사이먼 과제에서 참가자는 화살표가 초록색이면 왼쪽 버튼을, 빨간색이면 오른쪽 버튼을 누른다. (B) Go/no-go 과제의 참가자는 화살표가 빨간색일 때에만 반응하고 초록색일 때는 반응하지 않아야 한다. (C) 결합 사이먼 과제에서 한 참가자는 초록색 화살표에 대해 go/no-go 과제를 하고, 다른 참가자는 빨간색 화살표에 대해 go/no-go 과제를 한다.
+
+```{r, fig.height=4}
+ggdraw() + draw_image("figs/Fig1.jpg")
+```
+
+
+<br>
+
+___
+
+<br>
+
+
+# Pilot Experiment
+
+[Sebanz 등(2003)](https://bit.ly/37DlJI1)이 보고한 효과를 재현하였다. 참가자는 **Solo** 구획에서는 과제를 혼자 수행하였고(Fig 1B), **Joint** 구획에서는 다른 참가자(실험자)와 함께 과제를 수행하였다(Fig 1C). 
+
+<br><br>
+
+
+## Data
+
+전체 시행 중 참가자가 반응해야 하는 시행을 추출하여 분석하였다. 
+
+```{r, collapse=TRUE}
+E1 = read.csv('data/mergeJSEv1.csv', header = TRUE)
+E1$sid <- factor(E1$sid)
+E1$performer = factor(E1$performer, levels=c(1,2), labels=c("Solo","Joint"))
+E1$compatibility = factor(E1$compatibility, levels=c(1,2), 
+                          labels=c("Compatible","Incompatible"))
+E1$rt <- E1$rt*1000 
+str(E1)
+headTail(E1)
+
+table(E1$sid)
+table(E1$corr, E1$sid)
+table(E1$turn, E1$sid) # 0-confederate turn, 1-subject turn
+
+S1 <- E1 %>% 
+  filter(turn==1) %>% 
+  select(sid, performer, compatibility, corr, rt)
+  
+colSums(table(S1$sid, S1$corr))
+headTail(S1)
+str(S1)
+
+# 개별참가자의 표적 색깔
+S2 <- E1 %>% 
+  filter(turn==1) %>% 
+  select(sid, performer, compatibility, col, resp, corr, rt)
+table(S2$col, S2$sid) # 1,2,5,6,9,10 - red, 3,4,7,8 - green
+
+# check errors, anticipatory rts, etc.
+( nCorr <- S1 %>% filter(corr==1) %>% nrow() ) # correct RT
+( nIncorr <- S1 %>% filter(corr!=1) %>% nrow() ) # incorrect RT
+nIncorr*100/nrow(S1)
+
+( numAntici <- S1 %>% filter(corr==1 & rt < 200) %>% nrow() ) # anticipatory correct RT
+
+# correct RTs
+cS1 <- S1 %>% filter(corr == 1) %>% 
+  group_by(sid, performer, compatibility) %>% 
+  nest() %>% 
+  mutate(lbound = map(data, ~mean(.$rt)-3*sd(.$rt)),
+         ubound = map(data, ~mean(.$rt)+3*sd(.$rt))) %>%
+  unnest(c(lbound, ubound)) %>%
+  unnest(data) %>%
+  mutate(Outlier = (rt < lbound)|(rt > ubound)) %>%
+  filter(Outlier == FALSE) %>%
+  ungroup() %>%
+  select(sid, performer, compatibility, rt)
+
+# percetage trimmed
+(nCorr-nrow(cS1))*100/nrow(S1)
+```
+
+오류율은 `r nIncorr*100/nrow(S1)`%에 불과하므로 조건별 비교를 생략한다.
+
+<br>
+
+
+## Reaction Times
+
+반응시간 중 200ms보다 짧은 기대반응(anticipatory responses)은 한 건도 없었다. 각 참가자의 조건별 반응시간들 중 평균으로부터 3*SD*를 벗어난 `r round((nCorr-nrow(cS1))*100/nrow(S1), digits=4)`%의 반응시간들을 분석에서 제외하였다. 
+
+<br>
+
+
+### Descriptive Stats
+
+```{r, collpase=TRUE}
+cS1slong <- cS1 %>% group_by(sid, performer, compatibility) %>% 
+  summarise(rt = mean(rt)) %>% 
+  ungroup()
+
+# 4 cells
+cS1slong %>% group_by(performer, compatibility) %>% 
+  summarise(M = mean(rt), SD = sd(rt)) %>% 
+  ungroup() %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Performer x Compatibility")
+
+# 2 cells by performer
+cS1 %>% group_by(sid, performer) %>% 
+  summarise(rt = mean(rt)) %>% 
+  ungroup() %>% 
+  group_by(performer) %>% 
+  summarise(M = mean(rt), SD = sd(rt)) %>% 
+  ungroup() %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Performer")
+
+# 2 cells by compatibility
+cS1 %>% group_by(sid, compatibility) %>% 
+  summarise(rt = mean(rt)) %>% 
+  ungroup() %>% 
+  group_by(compatibility) %>% 
+  summarise(M = mean(rt), SD = sd(rt)) %>% 
+  ungroup() %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Compatibility")
+```
+
+
+<br>
+
+### Plots
+
+```{r}
+# 2x2 factorial plot
+cS1wsci <- cS1slong %>% 
+  wsci(id = "sid", 
+       factors = c("performer", "compatibility"), 
+       dv = "rt") %>% 
+  rename("wsci" = "rt")
+
+cS1mean <- cS1slong %>% group_by(performer, compatibility) %>%
+  summarise(rt = mean(rt)) %>% 
+  ungroup()
+
+cS1g <- merge(cS1mean, cS1wsci, by = c("performer", "compatibility"), all = TRUE)
+
+cS1swide <- cS1slong %>%  # wide format, needed for geom_segments.
+  pivot_wider(id_cols='sid', names_from=c('performer', 'compatibility'), values_from='rt' )
+
+G1 <- ggplot() + 
+  geom_bar(data=cS1g, aes(x=performer, y=rt, fill=compatibility),
+           stat="identity", width=0.7, color="black", position=position_dodge(.8)) + 
+  geom_linerange(data=cS1g, aes(x=performer, ymin=rt-wsci, ymax=rt+wsci, group=compatibility),
+                 size=0.8, position=position_dodge(0.8)) +
+  scale_fill_manual(values=c('gray100','gray30'), # 회색조 
+                    labels=c("Compatible", "Incompatible")) +
+  # scale_fill_manual(values=c('#0073C2FF','#EFC000FF'), # 파란-노랑
+  #                   labels=c("Compatible", "Incompatible")) +
+  geom_point(data=cS1slong, aes(x=performer, y=rt, group=compatibility),
+             position=position_dodge(0.6), color="gray80", size=1.8) +
+  geom_segment(data=cS1swide, aes(x=1-.15, y=Solo_Compatible, 
+                                  xend=1+.15, yend=Solo_Incompatible), color="gray80") +
+  geom_segment(data=cS1swide, aes(x=2-.15, y=Joint_Compatible, 
+                                  xend=2+.15, yend=Joint_Incompatible), color="gray80") +
+  labs(x = "Performer", y = "Reaction Time (ms)") +
+  coord_cartesian(ylim = c(250, 450), clip = "on") +
+  theme_bw(base_size = 18) +
+  theme(legend.position="top",
+        legend.spacing.x = unit(0.5, 'lines'),
+        legend.title = element_blank(),
+        legend.background = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+
+
+# compatibility effect
+cS1CEswide <- cS1swide %>% 
+  mutate(Solo = Solo_Incompatible - Solo_Compatible,
+         Joint = Joint_Incompatible - Joint_Compatible) %>% 
+  select(sid, Solo, Joint)
+
+cS1CEslong <- cS1CEswide %>% 
+  pivot_longer(cols = c('Solo', 'Joint'), 
+               names_to = 'performer',
+               values_to = 'ce')
+cS1CEslong$performer <- factor(cS1CEslong$performer, levels=c("Solo", "Joint"))
+
+cS1CEmean <- cS1CEslong %>% group_by(performer) %>%
+  summarise(ce = mean(ce)) %>% 
+  ungroup()
+
+cS1CEwsci <- cS1CEslong %>% # wsci - Morey
+  wsci(id = "sid", 
+       factors = c("performer"), 
+       dv = "ce") %>% 
+  rename("wsci" = "ce")
+
+cS1CEg <- merge(cS1CEmean, cS1CEwsci, by = c("performer"), all = TRUE)
+
+G2 <- ggplot(cS1CEslong, aes(x=performer, y=ce)) +
+  geom_hline(yintercept = 0) +
+  geom_violin(width = 0.5, trim=TRUE) + 
+  geom_point(color="gray80", size=1.8) +
+  geom_segment(data=cS1CEswide, color="gray80", 
+               aes(x=1, y=Solo, xend=2, yend=Joint)) +
+  geom_pointrange(cS1CEg, inherit.aes=FALSE,
+                  mapping=aes(x = performer, y=ce, 
+                              ymin = ce - wsci, ymax = ce + wsci), 
+                  colour="darkred", size = 1) +
+  labs(x = "Performer", y = "Congruency Effect (ms)") +
+  coord_cartesian(ylim = c(-10, 30), clip = "on") +
+  scale_y_continuous(breaks=c(-10, 0, 10, 20, 30)) +
+  theme_bw(base_size = 18) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+
+# Multipanel plot
+G1 + G2 + plot_layout(nrow = 1, widths = c(2, 1.3))
+```
+
+
+### Normality Test 
+
+반응시간 평균의 분포가 정규분포를 이루는지 검증하였다. 
+
+```{r, comment=NA, collapse=TRUE, fig.height = 4}
+# normality test
+N1 <- ggpubr::ggdensity(cS1slong$rt,
+                        main = "Density plot",
+                        xlab = "Response Times (msec)") + 
+	theme(axis.text.y = element_blank(),
+				axis.ticks.y = element_blank())
+N2 <- ggpubr::ggqqplot(cS1slong$rt, 
+                       main = "Q-Q plot")
+N1 + N2 + plot_layout(nrow = 1, widths = c(1, 1))
+shapiro.test(cS1slong$rt) # 만족
+```
+
+정규분포 가정에 위배되지 않으므로 ANOVA를 실시할 수 있다.
+
+<br>
+
+
+### ANOVA
+
+```{r}
+cS1.aov <- cS1slong %>% aov_ez(id = "sid", dv = "rt", within = c("performer", "compatibility"))
+cS1.aov %>% anova(es = "pes") %>% 
+  kable(digits = 4, caption = "2x2 ANOVA table")
+
+# afex_plot(cS1.aov, x = "performer", trace = "compatibility") 
+
+cS1slong %>% filter(performer == 'Solo') %>% 
+  aov_ez(id = 'sid', dv = 'rt', within = 'compatibility') %>% 
+  anova(es = "pes") %>% 
+  kable(digits = 4, caption = "Congruency effect in the Solo condition")
+
+cS1slong %>% filter(performer == 'Joint') %>% 
+  aov_ez(id = 'sid', dv = 'rt', within = 'compatibility') %>% 
+  anova(es = "pes") %>% 
+  kable(digits = 4, caption = "Congruency effect in the Joint condition")
+```
+
+<br>
+
+
+### Permutation Test
+
+**본실험**의 자료는 정규성 가정에 위배된 경우가 있었다. 따라서 치환검정을 모든 분석에 적용하기로 한다. 
+
+```{r, comment=NA, fig.height = 3}
+# two-way permutation anova
+cS1.2wayperm <- aovperm(rt ~ performer * compatibility + Error(sid/(performer*compatibility)),
+                        data = cS1slong, np = nsims)
+summary(cS1.2wayperm) %>%
+	kable(digits = 4, caption = "Nonparametric ANOVA")
+
+plot(cS1.2wayperm, effect = c("performer", 
+															"compatibility", 
+															"performer:compatibility"))
+```
+
+`compatibility` 주효과와 `performer:compatibility` 상호작용이 유의미하였다. <br>
+조건별 일치효과가 0보다 큰지 확인하였다.
+
+```{r, comment=NA}
+cS1Solo.1wayperm <- aovperm(rt ~ compatibility + Error(sid/(compatibility)),
+                        data = filter(cS1slong, performer=='Solo'), np = nsims)
+summary(cS1Solo.1wayperm) %>%
+	kable(digits = 4, caption = "Nonparametric simple test")
+
+cS1Joint.1wayperm <- aovperm(rt ~ compatibility + Error(sid/(compatibility)),
+                            data = filter(cS1slong, performer=='Joint'), np = nsims)
+summary(cS1Joint.1wayperm) %>%
+	kable(digits = 4, caption = "Nonparametric simple test")
+```
+
+사후검증을 위해 FDR 절차로 *p*-value를 보정하였다.
+
+```{r, comment=NA}
+tmp <- p.adjust(c(cS1Solo.1wayperm$table$`resampled P(>F)`, 
+                  cS1Joint.1wayperm$table$`resampled P(>F)`), "fdr")
+data.frame(Solo = tmp[1], Joint = tmp[2]) %>% 
+  kable(align = 'c', digits = 4, caption = "FDR adjusted p-values")
+```
+
+일치 효과는 **Solo** 조건에서 유의미하지 않고 **Joint** 조건에서만 유의미하였다.
+
+
+<br>
+
+
+## Power Test
+
+예비실험의 **Joint** 조건의 결과를 활용하여 참가자 수를 추정하였다. **High load** 집단의 **dual** 과제에서만 SE가 관찰되지 않는 이원상호작용을 기대하였다.
+
+```{r, comment=NA, collapse=TRUE}
+# 조건별 평균
+diffM <- cS1 %>% 
+  group_by(sid, performer, compatibility) %>% 
+  summarise(M = mean(rt)) %>% 
+  ungroup() %>% 
+  group_by(performer, compatibility) %>% 
+  summarise(RT = mean(M)) %>% 
+  ungroup() %>% 
+	filter(performer == "Joint") %>% 
+	pivot_wider(names_from = compatibility, values_from = RT) %>% 
+	mutate(RTdiff = Incompatible - Compatible)
+as.numeric(diffM$RTdiff)
+
+# 평균 표준편차
+pooledSD <- cS1 %>% 
+  group_by(sid, performer, compatibility) %>% 
+  summarise(M = mean(rt)) %>% 
+  ungroup() %>% 
+  group_by(performer, compatibility) %>% 
+  summarise(SD = sd(M)) %>% 
+  ungroup() %>% 
+	filter(performer == "Joint") %>%
+	summarise(pooledSD = mean(SD))
+as.numeric(pooledSD)
+
+# 집단별 참가자내 변인의 상관
+wcor <- cS1 %>% 
+  group_by(sid, performer, compatibility) %>% 
+  summarise(M = mean(rt)) %>% 
+  ungroup() %>%
+	filter(performer == "Joint") %>%
+  pivot_wider(names_from = compatibility, values_from = M) %>% 
+	summarise(wcor = cor(Compatible, Incompatible))
+as.numeric(wcor)
+
+dx0 <- ANOVA_design(
+	design = "2b*2w", 
+	n = 10,
+	mu = c(9,9,9,0),
+	sd = 35,
+	r = 0.97,
+	labelnames = c("GROUP", "Lowload", "Highload",
+								 "TASK", "Single", "Dual"),
+	plot = FALSE
+)
+
+plot_power(dx0, 
+           min_n = 10, max_n = 50, 
+           desired_power = 95, 
+					 plot = TRUE)
+```
+
+이원 상호작용 관찰을 위해 각 집단에 최소 25명이 필요하다. 본실험 참가자 수는 8의 배수가 되어야 하므로 **Low load** 집단과 **High load** 집단에 각 32명을 모집하기로 결정하였다. 
+
+
+
+<br><br>
+
+___
+
+<br><br>
+
+
+# Main Experiment
+
+작업기억 부하 효과를 관찰하였다. 한 세션에 두 명의 참가자가 함께 과제를 수행하였다(Fig 1C). 
+
+
+<br><br>
+
+
+## Working Memory Task
+
+
+<br>
+
+
+### Descriptive Stats
+
+조건별 작업기억 과제의 정확률은 다음과 같다.
+
+```{r, collapse=TRUE}
+WW <- read.csv('data/mergeJSEv5_WMtask.csv', header = TRUE)
+headTail(WW)
+
+table(WW$corr, WW$sid)
+WW <- WW %>% mutate(group = factor(group, levels = c('Low', 'High')))
+WW$rt <- WW$rt*1000
+
+# 참가자 수
+WW %>% group_by(group) %>% 
+  summarise(count = n_distinct(sid)) %>% 
+  ungroup()
+
+# WM RT
+rWW <- WW %>% filter(corr == 1) %>% 
+  group_by(sid, group) %>% 
+  nest() %>% 
+  mutate(lbound = map(data, ~mean(.$rt)-3*sd(.$rt)), # lower/upper bound 계산
+         ubound = map(data, ~mean(.$rt)+3*sd(.$rt))) %>% 
+  unnest(c(lbound, ubound)) %>% 
+  unnest(data) %>% 
+  mutate(outlier = (rt < lbound)|(rt > ubound)) %>% 
+  filter(outlier == FALSE) %>% 
+  ungroup() %>% 
+  select(sid, group, rt)
+
+(nrow(WW)-nrow(rWW))*100/nrow(WW)
+
+aWWsum <- WW %>% group_by(group, sid) %>%
+  summarise(MN = mean(corr)*100) %>% 
+  ungroup() %>% 
+  group_by(group) %>%
+  summarise(N = n(),
+						Mean = mean(MN), 
+            SD = sd(MN)) %>% 
+  ungroup()
+
+aWWsum %>% 
+  kable(digits = 4, caption = "Descriptive statistics: WM accuracy")
+```
+
+평균으로부터 3SD 떨어진 반응시간 `r round((nrow(WW)-nrow(rWW))*100/nrow(WW), digits=4)`%를 제거한 후, 집단별 작업기억 과제의 반응시간은 다음과 같다. 
+
+```{r}
+rWWsum <- rWW %>% group_by(group, sid) %>% 
+	summarise(MN = mean(rt)) %>% 
+	ungroup() %>% 
+	group_by(group) %>% 
+	summarise(N = n(),
+						Mean = mean(MN), 
+						SD = sd(MN)) %>% 
+	ungroup() 
+
+rWWsum %>% 
+	kable(digits = 4, caption = "Descriptive statistics: WM RT")
+```
+
+<br>
+
+
+### Plots
+
+```{r}
+aWWslong <- WW %>% group_by(sid, group) %>% 
+  summarise(acc = mean(corr)*100) %>% 
+  ungroup()
+
+WG1 <- ggplot(aWWslong, aes(x=group, y=acc)) +
+  geom_violin(width = 0.5, trim = TRUE) +
+  geom_dotplot(binaxis='y', stackdir='center', dotsize=.7, 
+               color='gray80', fill='gray80', binwidth=1.5) +
+  stat_summary(fun.data = mean_cl_normal, geom="pointrange", color="darkred", size=1) +
+  labs(x="Group", y="WM Accuracy") +
+  scale_x_discrete(labels=c("Low load", "High load")) +
+  coord_cartesian(ylim=c(50, 100)) +
+  theme_bw(base_size = 14) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = .5))
+
+# WM RT
+rWWslong <- rWW %>% group_by(sid, group) %>% 
+  summarise(rt = mean(rt)) %>% 
+  ungroup()
+
+WG2 <- ggplot(rWWslong, aes(x=group, y=rt)) +
+  geom_violin(width = 0.5, trim = TRUE) +
+  geom_dotplot(binaxis='y', stackdir='center', dotsize=.7, 
+               color='gray80', fill='gray80', binwidth=30) +
+  stat_summary(fun.data = mean_cl_normal, geom="pointrange", color="darkred", size=1) +
+  labs(x="Group", y="Reaction Time (ms)") +
+  scale_x_discrete(labels=c("Low load", "High load")) +
+  coord_cartesian(ylim=c(500, 1500)) +
+  theme_bw(base_size = 14) +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        plot.title = element_text(hjust = .5))
+
+# Multipanel plot
+WG1 + WG2
+```
+
+<br><br>
+
+
+### Accuracy Results
+
+#### Normality Test
+
+```{r, comment=NA ,fig.height = 4}
+N3 <- ggpubr::ggdensity(aWWslong$acc, 
+                        main = "Density plot",
+                        xlab = "WM Accuracy") + 
+	theme(axis.text.y = element_blank(),
+				axis.ticks.y = element_blank())
+N4 <- ggpubr::ggqqplot(aWWslong$acc, 
+                       main = "Q-Q plot")
+N3 + N4 + plot_layout(nrow = 1, widths = c(1, 1))
+shapiro.test(aWWslong$acc)  # 가정 위배 
+```
+
+<br>
+
+
+#### Permutation Test
+
+```{r, comment=NA}
+aWW.perm <- aovperm(acc ~ group, data = aWWslong, np = nsims)
+summary(aWW.perm) %>%
+	kable(digits = 4, caption = "Nonparametric ANOVA")
+```
+
+치환검정에서는 두 집단의 정확도 차이가 유위미하지 않았다. 
+
+
+#### Power Test
+```{r, comment=NA}
+daW <- ANOVA_design(
+	design = "2b", 
+	n = aWWsum$N,
+	mu = aWWsum$Mean, 
+	sd = aWWsum$SD,
+	labelnames = c("GROUP", "Low", "High"),
+	plot = FALSE
+)
+
+aWpwr <- ANOVA_power(daW, nsims = nsims)
+```
+
+시뮬레이션 결과, 정확도 차이의 검증력은 `r round(aWpwr$main_results$power, 1)`%였다.  효과 크기는 평균 $\eta^2_p$ = `r format(round(aWpwr$main_results$effect_size, 3), nsmall=3)` 또는 Cohen's $d$ = `r format(round(aWpwr$pc_results$effect_size, 3), nsmall=3)`.
+
+
+
+<br><br>
+
+
+### RT Results
+
+
+#### Normality Test
+
+```{r, fig.height = 4}
+N5 <- ggpubr::ggdensity(rWWslong$rt, 
+                  main = "Density plot",
+                  xlab = "WM Response Times (msec)")
+N6 <- ggpubr::ggqqplot(rWWslong$rt, 
+                       main = "Q-Q plot")
+N5 + N6 + plot_layout(nrow = 1, widths = c(1, 1))
+shapiro.test(rWWslong$rt)  #  정규분포다. 
+```
+
+반응시간 분포는 정규성 가정에 위배되지 않았다. 
+
+<br>
+
+
+#### ANOVA
+
+```{r, comment=NA}
+rWW.aov <- rWWslong %>% aov_ez(id = "sid", dv = "rt", between = "group")
+rWW.aov %>% anova(es = "pes") %>% 
+  kable(digits = 4, caption = "One-way ANOVA table")
+```
+
+변량분석 결과, **Low load** 집단의 반응이 **High load** 집단보다 유의미하게 빨랐다.
+
+<br>
+
+
+#### Permutation Test
+
+```{r, comment=NA}
+rWW.perm <- aovperm(rt ~ group, data = rWWslong, np = nsims)
+summary(rWW.perm) %>%
+    kable(digits = 4, caption = "Nonparametric ANOVA")
+```
+
+치환검정은 변량분석과 같은 결과를 보였다. 
+
+
+#### Power Test
+```{r, comment=NA}
+drW <- ANOVA_design(
+	design = "2b", 
+	n = rWWsum$N,
+	mu = rWWsum$Mean, 
+	sd = rWWsum$SD,
+	labelnames = c("GROUP", "Low", "High"),
+	plot = FALSE
+)
+
+rWpwr <- ANOVA_power(drW, nsims = nsims)
+```
+
+
+<br><br>
+
+
+## Color Judgment Task
+
+본 연구에서 가장 중요한 분석이다. 
+
+참가자간 요인 `Group` (**Low load** vs. **High load**), 참가자내 요인 `Task` (**Single** vs. **Dual**), 참가자내 요인 `Compatibility` (**Compatible** vs. **Incompatible**)의 2x2x2 설계이다. 
+
+### Descriptive Stats
+
+#### Accuracy
+
+```{r, collapse=TRUE}
+TT <- read.csv('data/mergeJSEv5_GNGtask.csv', header = TRUE)
+headTail(TT)
+
+unique(TT$group)
+unique(TT$epoch)
+unique(TT$task)
+unique(TT$compatibility) # 1 0 2
+unique(TT$targ)
+unique(TT$corr)
+
+table(TT$targ, TT$sid)
+table(TT$compatibility, TT$sid)
+
+
+TT <- TT %>% mutate(group = factor(group, levels = c('Low', 'High')),
+                    task = factor(task, levels=1:2, labels=c("Single","Dual")),
+                    compatibility = factor(compatibility, levels=0:2, 
+                                           labels=c("Nontarget","Compatible","Incompatible")),
+                    targ = factor(targ, levels=0:1, labels=c("Nontarget","Target")),
+                    rt = rt*1000) %>% 
+  filter(targ == "Target") %>% 
+  droplevels() %>% 
+  select(sid, group, epoch, task, compatibility, corr, rt)
+  
+TT %>% sapply(levels)
+
+headTail(TT)
+
+unique(TT$compatibility)
+
+# averaged accuracy
+aTTslong <- TT %>% group_by(group, sid, task, compatibility) %>% 
+  summarise(Accuracy = mean(corr)*100) %>% 
+  ungroup() 
+
+# summary
+aTTsum <- aTTslong %>% group_by(group, task, compatibility) %>% 
+  summarise(N = n(),
+  					MN = mean(Accuracy), 
+            SD = sd(Accuracy)) %>% 
+  ungroup() 
+aTTsum %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Group x Load x Congruency")
+
+aTTslong %>% group_by(group) %>% 
+  summarise(MN = mean(Accuracy), 
+            SD = sd(Accuracy)) %>% 
+  ungroup() %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Group")
+
+aTTslong %>% group_by(task) %>% 
+  summarise(MN = mean(Accuracy), 
+            SD = sd(Accuracy)) %>% 
+  ungroup() %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Load")
+
+aTTslong %>% group_by(compatibility) %>% 
+  summarise(MN = mean(Accuracy), 
+            SD = sd(Accuracy)) %>% 
+  ungroup() %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Congruency")
+```
+
+<br><br>
+
+
+#### RT
+
+```{r, collapse=TRUE}
+( num_anticip <- nrow(TT %>% filter(corr==1 & rt < 150)) ) # anticipatory response 제거
+
+cTT <- TT %>% filter(corr==1 & rt >= 150) # 정반응만 선별
+
+num_anticip*100/nrow(cTT) # 0.02678093%
+
+headTail(cTT)
+
+# trimmed
+tTT <- cTT %>% group_by(group, sid, task, compatibility) %>% 
+  nest() %>% 
+  mutate(lbound = map(data, ~mean(.$rt)-3*sd(.$rt)), # lower/upper bound 계산
+         ubound = map(data, ~mean(.$rt)+3*sd(.$rt))) %>% 
+  unnest(c(lbound, ubound)) %>% 
+  unnest(data) %>% 
+  mutate(outlier = (rt < lbound)|(rt > ubound)) %>% 
+  filter(outlier == FALSE) %>% 
+  select(group, sid, epoch, task, compatibility, rt)
+
+(nrow(cTT)-nrow(tTT))*100/nrow(cTT) # 1.131494% 제거되었다.
+
+tTTslong <- tTT %>% group_by(group, sid, task, compatibility) %>% 
+  summarise(RT = mean(rt)) %>% 
+  ungroup()
+
+# summary
+tTTsum <- tTTslong %>% group_by(group, task, compatibility) %>% 
+  summarise(MN = mean(RT), 
+            SD = sd(RT)) %>% 
+  ungroup() 
+tTTsum %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Group x Task x Compatibility")
+
+tTTslong %>% group_by(group) %>% 
+  summarise(MN = mean(RT), 
+            SD = sd(RT)) %>% 
+  ungroup() %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Group")
+
+tTTslong %>% group_by(task) %>% 
+  summarise(MN = mean(RT), 
+            SD = sd(RT)) %>% 
+  ungroup() %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Task")
+
+tTTslong %>% group_by(compatibility) %>% 
+  summarise(MN = mean(RT), 
+            SD = sd(RT)) %>% 
+  ungroup() %>% 
+  kable(digits = 4, caption = "Descriptive statistics: Compatibility")
+
+```
+
+반응시간이 150ms보다 빠른 4시행( `r round(num_anticip*100/nrow(cTT), digits=4)`%)을 분석에서 제외한 후, 각 참가자의 조건별 반응시간들 중 평균으로부터 3*SD*를 벗어난 `r round((nrow(cTT)-nrow(tTT))*100/nrow(cTT), digits=4)`%의 반응시간들을 분석에서 추가로 제외하였다. 
+
+<br><br>
+
+
+### Plot
+
+#### Accuracy
+
+```{r}
+aTTswide <- aTTslong %>% pivot_wider(id_cols=c('group', 'sid'), 
+                                     names_from=c('task', 'compatibility'), 
+                                     values_from='Accuracy' )
+aTTswideL <- aTTswide %>% filter(group == 'Low')
+aTTswideH <- aTTswide %>% filter(group == 'High')
+
+aTTmean <- aTTslong %>% 
+  group_by(group, task, compatibility) %>% 
+  summarise(Accuracy = mean(Accuracy)) %>% 
+  ungroup() 
+
+tmp1 <- aTTslong %>% filter(group == "Low") %>% 
+  wsci(id = "sid",
+       factor = c("task", "compatibility"),
+       dv = "Accuracy") %>% 
+  mutate(group = "Low") %>% 
+  select(group, task, compatibility, Accuracy) %>% 
+  rename("wsci" = "Accuracy")
+
+tmp2 <- aTTslong %>% filter(group == "High") %>% 
+  wsci(id = "sid",
+       factor = c("task", "compatibility"),
+       dv = "Accuracy") %>% 
+  mutate(group = "High") %>% 
+  select(group, task, compatibility, Accuracy) %>% 
+  rename("wsci" = "Accuracy")
+
+aTTwsci <- merge(tmp1, tmp2, all = TRUE)
+
+aTTg <- merge(aTTmean, aTTwsci, by = c("group", "task", "compatibility"), all = TRUE)
+
+group.labs <- c("Low load group", "High load group")
+names(group.labs) <- c("Low", "High")
+
+ggplot() + 
+  geom_bar(data=aTTg, aes(x=task, y=Accuracy, fill=compatibility),
+           stat="identity", width=0.7, color="black", position=position_dodge(.8)) + 
+  facet_wrap(~group, labeller = labeller(group = group.labs)) +
+  geom_linerange(data=aTTg, aes(x=task, ymin=Accuracy-wsci, ymax=Accuracy+wsci, 
+                                group=compatibility),
+                 size=1, position=position_dodge(0.8)) +
+  scale_fill_manual(values=c('gray100','gray30'),
+                    labels=c("Compatible", "Incompatible")) +
+  # scale_fill_manual(values=c('#0073C2FF','#EFC000FF'),
+  #                   labels=c("Compatible", "Incompatible")) +
+  geom_point(data=aTTslong, aes(x=task, y=Accuracy, group=compatibility),
+             position=position_dodge(0.6), color="gray80", size=1.8) +
+  geom_segment(data=aTTswideL, aes(x=1-.15, y=Single_Compatible,
+                                   xend=1+.15, yend=Single_Incompatible), color="gray80") +
+  geom_segment(data=aTTswideL, aes(x=2-.15, y=Dual_Compatible,
+                                   xend=2+.15, yend=Dual_Incompatible), color="gray80") +
+  geom_segment(data=aTTswideH, aes(x=1-.15, y=Single_Compatible,
+                                   xend=1+.15, yend=Single_Incompatible), color="gray80") +
+  geom_segment(data=aTTswideH, aes(x=2-.15, y=Dual_Compatible,
+                                   xend=2+.15, yend=Dual_Incompatible), color="gray80") +
+  labs(x = "Task", y = "Accuracy") +
+  coord_cartesian(ylim = c(50, 100), clip = "on") +
+  theme_bw(base_size = 18) +
+  theme(legend.position="top",
+        legend.spacing.x = unit(0.5, 'lines'),
+        strip.text.x = element_text(size = 18),
+        legend.title = element_blank(),
+        legend.background = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+```
+
+
+#### RT
+
+```{r e2att_rt_plot}
+tTTswide <- tTTslong %>% pivot_wider(id_cols=c('group', 'sid'), 
+                                     names_from=c('task', 'compatibility'), 
+                                     values_from='RT' )
+tTTswideL <- tTTswide %>% filter(group == 'Low')
+tTTswideH <- tTTswide %>% filter(group == 'High')
+
+tTTmean <- tTTslong %>% 
+  group_by(group, task, compatibility) %>% 
+  summarise(RT = mean(RT)) %>% 
+  ungroup() 
+
+tmp1 <- tTTslong %>% filter(group == "Low") %>% 
+  wsci(id = "sid",
+       factor = c("task", "compatibility"),
+       dv = "RT") %>% 
+  mutate(group = "Low") %>% 
+  select(group, task, compatibility, RT) %>% 
+  rename("wsci" = "RT")
+
+tmp2 <- tTTslong %>% filter(group == "High") %>% 
+  wsci(id = "sid",
+       factor = c("task", "compatibility"),
+       dv = "RT") %>% 
+  mutate(group = "High") %>% 
+  select(group, task, compatibility, RT) %>% 
+  rename("wsci" = "RT")
+
+tTTwsci <- merge(tmp1, tmp2, all = TRUE)
+
+tTTg <- merge(tTTmean, tTTwsci, by = c("group", "task", "compatibility"), all = TRUE)
+
+group.labs <- c("Low load group", "High load group")
+names(group.labs) <- c("Low", "High")
+
+# range(tTTslong$RT)
+
+ggplot() + 
+  geom_bar(data=tTTg, aes(x=task, y=RT, fill=compatibility),
+           stat="identity", width=0.7, color="black", position=position_dodge(.8)) + 
+  facet_wrap(~group, labeller = labeller(group = group.labs)) +
+  geom_linerange(data=tTTg, aes(x=task, ymin=RT-wsci, ymax=RT+wsci, group=compatibility),
+                 size=1, position=position_dodge(0.8)) +
+  scale_fill_manual(values=c('gray100','gray30'),
+                    labels=c("Compatible", "Incompatible")) +
+  # scale_fill_manual(values=c('#0073C2FF','#EFC000FF'),
+  #                   labels=c("Compatible", "Incompatible")) +
+  geom_point(data=tTTslong, aes(x=task, y=RT, group=compatibility),
+             position=position_dodge(0.6), color="gray80", size=1.8) +
+  geom_segment(data=tTTswideL, aes(x=1-.15, y=Single_Compatible,
+                                   xend=1+.15, yend=Single_Incompatible), color="gray80") +
+  geom_segment(data=tTTswideL, aes(x=2-.15, y=Dual_Compatible,
+                                   xend=2+.15, yend=Dual_Incompatible), color="gray80") +
+  geom_segment(data=tTTswideH, aes(x=1-.15, y=Single_Compatible,
+                                   xend=1+.15, yend=Single_Incompatible), color="gray80") +
+  geom_segment(data=tTTswideH, aes(x=2-.15, y=Dual_Compatible,
+                                   xend=2+.15, yend=Dual_Incompatible), color="gray80") +
+  labs(x = "Task", y = "Reaction Times (msec)") +
+  coord_cartesian(ylim = c(300, 550), clip = "on") +
+  theme_bw(base_size = 18) +
+  theme(legend.position="top",
+        legend.spacing.x = unit(0.5, 'lines'),
+        strip.text.x = element_text(size = 18),
+        legend.title = element_blank(),
+        legend.background = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+
+tTTCEswide <- tTTswide %>% mutate(absCE = Single_Incompatible - Single_Compatible,
+                                  preCE = Dual_Incompatible - Dual_Compatible) %>% 
+  select(group, sid, absCE, preCE)
+
+tTTCEslong <- tTTCEswide %>% pivot_longer(cols = c('absCE', 'preCE'), names_to = "task")
+
+tTTCEswideL <- tTTCEswide %>% filter(group == 'Low')
+tTTCEswideH <- tTTCEswide %>% filter(group == 'High')
+
+tTTCEmean <- tTTCEslong %>% 
+  group_by(group, task) %>% 
+  summarise(value = mean(value)) %>% 
+  ungroup() 
+
+tmp1 <- tTTCEslong %>% filter(group == "Low") %>% 
+  wsci(id = "sid",
+       factor = "task",
+       dv = "value") %>% 
+  mutate(group = "Low") %>% 
+  select(group, task, value) %>% 
+  rename("wsci" = "value")
+
+tmp2 <- tTTCEslong %>% filter(group == "High") %>% 
+  wsci(id = "sid",
+       factor = "task",
+       dv = "value") %>% 
+  mutate(group = "High") %>% 
+  select(group, task, value) %>% 
+  rename("wsci" = "value")
+
+tTTCEwsci <- merge(tmp1, tmp2, all = TRUE)
+
+tTTCEg <- merge(tTTCEmean, tTTCEwsci, by = c("group", "task"), all = TRUE)
+```
+
+```{r, fig.height = 4}
+ggplot(data=tTTCEslong, aes(x=group, y=value, color=task)) +
+  geom_hline(yintercept = 0) +
+  geom_violin(width = 0.5, size=1, trim=TRUE) +
+  geom_point(aes(x=group, y=value, group=task),
+             position=position_dodge(0.5), color="gray80", size=1.8, show.legend = FALSE) +
+  geom_segment(data=filter(tTTCEswide, group=="Low"), inherit.aes = FALSE,
+               aes(x=1-.12, y=filter(tTTCEswide, group=="Low")$absCE,
+                   xend=1+.12, yend=filter(tTTCEswide, group=="Low")$preCE),
+               color="gray80") +
+  geom_segment(data=filter(tTTCEswide, group=="High"), inherit.aes = FALSE,
+               aes(x=2-.12, y=filter(tTTCEswide, group=="High")$absCE,
+                   xend=2+.12, yend=filter(tTTCEswide, group=="High")$preCE),
+               color="gray80") +
+  geom_pointrange(data=tTTCEg, 
+                  aes(x = group, ymin = value-wsci, ymax = value+wsci, group = task),
+                  position = position_dodge(0.5), color = "darkred", size = 1, show.legend = FALSE) +
+  scale_color_manual(values=c('#0073C2FF','#EFC000FF'),
+                    labels=c("Single", "Dual")) +
+  scale_x_discrete(labels=c("Low" = "Low load", "High" = "High load")) +
+  labs(x = "Group", 
+       y = "Compatibility Effect (ms)", 
+       color='Task') +
+  coord_cartesian(ylim = c(-20, 40), clip = "on") +
+  theme_bw(base_size = 18) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) 
+
+```
+
+
+<br><br>
+
+### Accuracy Results
+
+#### Noramlity Test
+
+```{r, comment=NA, fig.height = 4}
+N7 <- ggpubr::ggdensity(aTTslong$Accuracy, 
+                        main = "Density plot",
+                        xlab = "WM Accuracy")
+N8 <- ggpubr::ggqqplot(aTTslong$Accuracy, 
+                       main = "Q-Q plot")
+N7 + N8 + plot_layout(nrow = 1, widths = c(1, 1))
+shapiro.test(aTTslong$Accuracy)  # 가정 위배 
+```
+
+자료가 정규성 가정에 위배된다. 
+
+<br>
+
+
+
+#### Permutation Test
+
+```{r, comment=NA}
+aTT.perm <- aovperm(Accuracy ~ group * task * compatibility + Error(sid/(task*compatibility)),
+                    data = aTTslong, np = nsims)
+summary(aTT.perm) %>%
+    kable(digits = 4, caption = "Nonparametric ANOVA")
+```
+
+`compatibility` 주효과만 유의미하였다. `group:load:cong` 상호작용이 유의미한 경향성을 보였다. 
+
+```{r e2att_acc_posthoc}
+aTTLS.perm <- aovperm(Accuracy ~ compatibility + Error(sid/(compatibility)),
+                      data = filter(aTTslong, group=='Low', task=='Single'), np = nsims)
+summary(aTTLS.perm) %>%
+    kable(digits = 4, caption = "Low load & Single task: Simon effect")
+
+aTTLD.perm <- aovperm(Accuracy ~ compatibility + Error(sid/(compatibility)),
+                      data = filter(aTTslong, group=='Low', task=='Dual'), np = nsims)
+summary(aTTLD.perm) %>%
+    kable(digits = 4, caption = "Low load & Dual task: Simon effect")
+
+aTTHS.perm <- aovperm(Accuracy ~ compatibility + Error(sid/(compatibility)),
+                      data = filter(aTTslong, group=='High', task=='Single'), np = nsims)
+summary(aTTHS.perm) %>%
+    kable(digits = 4, caption = "High load & Single task: Simon effect")
+
+aTTHD.perm <- aovperm(Accuracy ~ compatibility + Error(sid/(compatibility)),
+                      data = filter(aTTslong, group=='High', task=='Dual'), np = nsims)
+summary(aTTHD.perm) %>%
+    kable(digits = 4, caption = "High load & Dual task: Simon effect")
+```
+
+사후검증에서 FDR 절차로 *p*-value를 보정하였다.
+
+```{r}
+tmp <- p.adjust(c(aTTLS.perm$table$`resampled P(>F)`, 
+                  aTTLD.perm$table$`resampled P(>F)`,
+                  aTTHS.perm$table$`resampled P(>F)`,
+                  aTTHD.perm$table$`resampled P(>F)`), "fdr")
+data.frame(LowloadSolo = tmp[1], LowloadDual = tmp[2],
+           HighloadSolo = tmp[3], HighloadDual = tmp[4]) %>% 
+  kable(align = 'c', digits = 4, caption = "FDR adjusted p-values")
+```
+
+<br>
+
+#### Power Test
+
+```{r, comment=NA, collapse=TRUE}
+daT <- ANOVA_design(
+	design = "2b*2w*2w", 
+	n = 32,
+	mu = aTTsum$MN, 
+	sd = aTTsum$SD,
+	labelnames = c("G", "Lo", "Hi",
+								 "T", "Sing", "Dual",
+								 "C", "Cmp", "Inc"),
+	plot = FALSE
+)
+
+daTpwr <- ANOVA_power(daT, verbose = FALSE,	nsims = nsims)
+
+daTpwr$main_results %>%
+	kable(digits = 4, caption = "Effect Sizes: ANOVA")
+
+daTpwr$pc_results[c(1,14,23,28),] %>%
+	kable(digits = 4, caption = "Effect Sizes: Post-hoc")
+```
+
+<br><br>
+
+
+### RT Results
+
+#### Normality Test
+
+```{r, comment=NA, fig.height = 4}
+N9 <- ggpubr::ggdensity(tTTslong$RT, 
+                        main = "Density plot",
+                        xlab = "Attention Task RT")
+N10 <- ggpubr::ggqqplot(tTTslong$RT, 
+                       main = "Q-Q plot")
+N9 + N10 + plot_layout(nrow = 1, widths = c(1, 1))
+shapiro.test(tTTslong$RT) # 가정 위배 
+```
+
+반응시간 자료도 정규성 가정에 위배되었다. 
+
+<br>
+
+#### Permutation Test
+
+```{r, fig.height = 3}
+tTT.perm <- aovperm(RT ~ group * task * compatibility + Error(sid/(task*compatibility)),
+                    data = tTTslong, np = nsims)
+summary(tTT.perm) %>%
+    kable(digits = 4, caption = "Nonparametric ANOVA")
+
+plot(tTT.perm, effect = c("group", "task", "compatibility"))
+plot(tTT.perm, effect = c("group:task", "group:compatibility"))
+plot(tTT.perm, effect = c("task:compatibility", "group:task:compatibility") )
+```
+
+조건별 일치효과가 0보다 큰지 확인하였다.
+
+```{r e2att_rt_posthoc}
+tTTLS.perm <- aovperm(RT ~ compatibility + Error(sid/(compatibility)),
+                      data = filter(tTTslong, group=='Low', task=='Single'), np = nsims)
+summary(tTTLS.perm) %>%
+    kable(digits = 4, caption = "Low load & Single task: Simon effect")
+
+tTTLD.perm <- aovperm(RT ~ compatibility + Error(sid/(compatibility)),
+                      data = filter(tTTslong, group=='Low', task=='Dual'), np = nsims)
+summary(tTTLD.perm) %>%
+    kable(digits = 4, caption = "Low load & Dual task: Simon effect")
+
+tTTHS.perm <- aovperm(RT ~ compatibility + Error(sid/(compatibility)),
+                      data = filter(tTTslong, group=='High', task=='Single'), np = nsims)
+summary(tTTHS.perm) %>%
+    kable(digits = 4, caption = "High load & Single task: Simon effect")
+
+tTTHD.perm <- aovperm(RT ~ compatibility + Error(sid/(compatibility)),
+                      data = filter(tTTslong, group=='High', task=='Dual'), np = nsims)
+summary(tTTHD.perm) %>%
+    kable(digits = 4, caption = "High load & Dual task: Simon effect")
+```
+
+사후검증에서 FDR 절차로 *p*-value를 보정하였다.
+
+```{r e2att_rt_posthoc_fdr}
+tmp <- p.adjust(c(tTTLS.perm$table$`resampled P(>F)`, 
+                  tTTLD.perm$table$`resampled P(>F)`,
+                  tTTHS.perm$table$`resampled P(>F)`,
+                  tTTHD.perm$table$`resampled P(>F)`), "fdr")
+data.frame(LowloadSolo = tmp[1], LowloadDual = tmp[2],
+           HighloadSolo = tmp[3], HighloadDual = tmp[4]) %>% 
+  kable(align = 'c', digits = 4, caption = "FDR adjusted p-values")
+```
+
+<br>
+
+#### Power Test
+
+```{r, comment=NA, collapse=TRUE}
+drT <- ANOVA_design(
+	design = "2b*2w*2w", 
+	n = 32,
+	mu = tTTsum$MN, 
+	sd = tTTsum$SD,
+	labelnames = c("G", "Lo", "Hi",
+								 "T", "Sing", "Dual",
+								 "C", "Cmp", "Inc"),
+	plot = FALSE
+)
+
+drTpwr <- ANOVA_power(drT, verbose = FALSE, nsims = nsims)
+
+drTpwr$main_results %>%
+	kable(digits = 4, caption = "Effect Sizes: ANOVA")
+
+drTpwr$pc_results[c(1,14,23,28),] %>%
+	kable(digits = 4, caption = "Effect Sizes: Post-hoc")
+
+```
+
+
+<br><br>
+
+
+
+
+<br><br>
+
+___
+
+<br><br>
+
+
+
+
+# Plots
+
+## Experiment 1
+
+```{r simple_fig2}
+G3 <- ggplot() + 
+  geom_bar(data=cS1g, aes(x=performer, y=rt, fill=compatibility),
+           stat="identity", width=0.7, color="black", position=position_dodge(.8)) + 
+  geom_linerange(data=cS1g, aes(x=performer, ymin=rt-wsci, ymax=rt+wsci, group=compatibility),
+                 size=0.8, position=position_dodge(0.8)) +
+  scale_fill_manual(values=c('gray100','gray30'),
+                    labels=c("Compatible", "Incompatible")) +
+  labs(x = "Performer", y = "Reaction Time (ms)") +
+  coord_cartesian(ylim = c(300, 400), clip = "on") +
+  theme_bw(base_size = 16) +
+  theme(legend.position="top",
+        legend.spacing.x = unit(0.5, 'lines'),
+        legend.title = element_blank(),
+        legend.background = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+
+G4 <- ggplot(cS1CEslong, aes(x=performer, y=ce)) +
+  geom_hline(yintercept = 0) +
+  geom_violin(width = 0.5, trim=TRUE) + 
+  ggbeeswarm::geom_quasirandom(color = "black", size = 3, alpha = 0.2, width = 0.2) +
+  geom_pointrange(cS1CEg, inherit.aes=FALSE,
+                  mapping=aes(x = performer, y=ce, 
+                              ymin = ce - wsci, ymax = ce + wsci), 
+                  colour="darkred", size = 1) +
+  labs(x = "Performer", y = "Incompatible - Compatible") +
+  coord_cartesian(ylim = c(-10, 30), clip = "on") +
+  scale_y_continuous(breaks=c(-10, 0, 10, 20, 30)) +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+
+# Multipanel plot
+G3 + G4 + plot_layout(nrow = 1, widths = c(2, 1.3))
+```
+
+
+## Experiment 2
+```{r}
+ggplot() + 
+  geom_bar(data=tTTg, aes(x=task, y=RT, fill=compatibility),
+           stat="identity", width=0.7, color="black", position=position_dodge(.8)) + 
+  facet_wrap(~group, labeller = labeller(group = group.labs)) +
+  geom_linerange(data=tTTg, aes(x=task, ymin=RT-wsci, ymax=RT+wsci, group=compatibility),
+                 size=1, position=position_dodge(0.8)) +
+  scale_fill_manual(values=c('gray100','gray30'),
+                    labels=c("Compatible", "Incompatible")) +
+  labs(x = "Task", y = "Reaction Times (msec)") +
+  coord_cartesian(ylim = c(300, 400), clip = "on") +
+  theme_bw(base_size = 16) +
+  theme(legend.position="top",
+        legend.spacing.x = unit(0.5, 'lines'),
+        strip.text.x = element_text(size = 18),
+        legend.title = element_blank(),
+        legend.background = element_blank(),
+        panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+
+ggplot(data=tTTCEslong, aes(x=group, y=value, color=task)) +
+  geom_hline(yintercept = 0) +
+  geom_violin(width = 0.5, size=1, trim=TRUE) +
+  ggbeeswarm::geom_quasirandom(groupOnX = TRUE, dodge.width=.5, 
+                               size = 3, alpha = 0.2, width = 0.2, 
+                               show.legend = FALSE) +
+  geom_pointrange(data=tTTCEg, 
+                  aes(x = group, ymin = value-wsci, ymax = value+wsci, group = task),
+                  position = position_dodge(0.5), color = "darkred", size = 1, show.legend = FALSE) +
+  scale_color_manual(values=c('#0073C2FF','#EFC000FF'),
+                     labels=c("Single", "Dual")) +
+  scale_x_discrete(labels=c("Low" = "Low load", "High" = "High load")) +
+  labs(x = "Group", 
+       y = "Incompatible - Compatible", 
+       color='Task') +
+  coord_cartesian(ylim = c(-20, 40), clip = "on") +
+  theme_bw(base_size = 16) +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank())
+```
+
+
+<br><br>
+
+___
+
+<br><br>
+
+
+# Session Info
+```{r, collapse=TRUE}
+sessionInfo()
+```
