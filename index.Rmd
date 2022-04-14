@@ -1,6 +1,6 @@
 ---
 title: "Loaded Joint Simon Effect"
-author: "cn"
+author: "Kim, Lee, & Yi (2022)"
 date: "`r Sys.Date()`"
 output:
   html_document:
@@ -13,7 +13,7 @@ output:
     theme: cosmo 
     highlight: tango
     code_folding: hide
-subtitle: Working memory load on the joint Simon effect
+subtitle: Effects of working memory load on the joint Simon effect
 mainfont: Noto Sans CJK KR
 ---
 
@@ -34,15 +34,14 @@ pre code, pre, code {
 set.seed(12345) # for reproducibility
 
 if (!require("pacman", quietly = TRUE)) install.packages("pacman")
-pacman::p_load(tidyverse, psych, papaja, knitr) # data manipulation
-pacman::p_load(afex, emmeans) # stats
-pacman::p_load(cowplot, patchwork) # plot
-pacman::p_load(permuco) # permutation
-pacman::p_load(Superpower) # power analysis
+pacman::p_load(tidyverse, psych, papaja, knitr, cowplot) # data manipulation, visualization
+pacman::p_load(afex, permuco, Superpower) # stats
+pacman::p_load_gh("thomasp85/patchwork", "RLesur/klippy", "mitchelloharawild/icons")
 
 options(dplyr.summarise.inform=FALSE)
 options(knitr.kable.NA = '')
 set_sum_contrasts() # see Singmann & Kellen (2020)
+klippy::klippy()
 
 nsims <- 1e4
 ```
@@ -1306,3 +1305,6 @@ ___
 ```{r, collapse=TRUE}
 sessionInfo()
 ```
+
+***
+[[View on Github `r icon_style(fontawesome("github-alt", style = "brands"), scale = 4, fill = "#56B4E9")`](https://github.com/cogneuro/loadedJSE)]{style="float:right"}
