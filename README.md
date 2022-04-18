@@ -2,8 +2,8 @@
 
 ## Authors
 
-* Hyojeong Kim (Department of Psychology, the University of Colorado, Boulder, hyojeongkim@utexas.edu) 
-* Jae-Yoon Lee (Department of Psychology, Yonsei University, jaeyoonlee89@gmail.com)
+* Hyojeong Kim (Department of Psychology, the University of Colorado, Boulder) 
+* Jae-Yoon Lee (Department of Psychology, Yonsei University)
 * Do-Joon Yi (Department of Psychology, Yonsei University, dojoon.yi@yonsei.ac.kr)
 
 ## Abstract
